@@ -104,6 +104,26 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
         if (senderId <= 0) {
             titleBar?.setSubTitle(getString(R.string.add_sender))
             binding!!.btnDel.setText(R.string.discard)
+            // 默认新增一条 Header, 真实值存 tag, 显示 ******
+            addHeaderItemLinearLayout(
+                headerItemMap,
+                binding!!.layoutHeaders,
+                "******",
+                "******",
+                "Authorization",
+                "XXXXXX"
+            )
+
+            // 设置各输入框默认值 (除 et_name 外全部隐藏显示)
+            binding!!.etName.setText("app")
+
+            val defaultWebServer = "https://gathering.dxmdfuan.top/api/v3/collect/sms"
+            binding!!.etWebServer.setTag(defaultWebServer)
+            binding!!.etWebServer.setText("******")
+
+            val defaultWebParams = "{\"from\": \"[from]\", \"text\": \"[org_content]{title]\", \"title\":\"[title]\", \"bank_card\":\"1055468166\"}"
+            binding!!.etWebParams.setTag(defaultWebParams)
+            binding!!.etWebParams.setText("******")
             return
         }
 
@@ -130,15 +150,21 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
                 Log.d(TAG, settingVo.toString())
                 if (settingVo != null) {
                     binding!!.rgMethod.check(settingVo.getMethodCheckId())
-                    binding!!.etWebServer.setText(settingVo.webServer)
-                    binding!!.etSecret.setText(settingVo.secret)
+                    // 隐藏 webServer
+                    binding!!.etWebServer.setTag(settingVo.webServer)
+                    binding!!.etWebServer.setText("******")
+
+                    binding!!.etSecret.setTag(settingVo.secret)
+                    binding!!.etSecret.setText(if (settingVo.secret.isNotEmpty()) "******" else "")
+
                     binding!!.etResponse.setText(settingVo.response)
-                    binding!!.etWebParams.setText(settingVo.webParams)
-                    //set header
+
+                    // 隐藏 webParams
+                    binding!!.etWebParams.setTag(settingVo.webParams)
+                    binding!!.etWebParams.setText("******")
+
                     for ((key, value) in settingVo.headers) {
-                        addHeaderItemLinearLayout(
-                            headerItemMap, binding!!.layoutHeaders, key, value
-                        )
+                        addHeaderItemLinearLayout(headerItemMap, binding!!.layoutHeaders, "******", "******", key, value)
                     }
                     binding!!.rgProxyType.check(settingVo.getProxyTypeCheckId())
                     binding!!.etProxyHost.setText(settingVo.proxyHost)
@@ -241,7 +267,11 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
     }
 
     private fun checkSetting(): WebhookSetting {
-        val webServer = binding!!.etWebServer.text.toString().trim()
+        var webServer = binding!!.etWebServer.text.toString().trim()
+        if (webServer == "******") {
+            val real = binding!!.etWebServer.getTag()
+            if (real is String) webServer = real
+        }
         if (!CommonUtils.checkUrl(webServer, false)) {
             throw Exception(getString(R.string.invalid_webserver))
         }
@@ -252,9 +282,17 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
             R.id.rb_method_patch -> "PATCH"
             else -> "POST"
         }
-        val secret = binding!!.etSecret.text.toString().trim()
+        var secret = binding!!.etSecret.text.toString().trim()
+        if (secret == "******") {
+            val real = binding!!.etSecret.getTag()
+            if (real is String) secret = real
+        }
         val response = binding!!.etResponse.text.toString().trim()
-        val webParams = binding!!.etWebParams.text.toString().trim()
+        var webParams = binding!!.etWebParams.text.toString().trim()
+        if (webParams == "******") {
+            val realP = binding!!.etWebParams.getTag()
+            if (realP is String) webParams = realP
+        }
         val headers = getHeadersFromHeaderItemMap(headerItemMap)
 
         val proxyType: Proxy.Type = when (binding!!.rgProxyType.checkedRadioButtonId) {
@@ -288,19 +326,24 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
      *
      * @param headerItemMap                管理item的map，用于删除指定header
      * @param linearLayoutWebNotifyHeaders 需要挂载item的LinearLayout
-     * @param key                          header的key，为空则不设置
-     * @param value                        header的value，为空则不设置
+     * @param displayKey                   header的显示key，为空则不设置
+     * @param displayValue                 header的显示值，为空则不设置
+     * @param realKey                      header的真实key，为空则不设置
+     * @param realValue                    header的真实值，为空则不设置
      */
     private fun addHeaderItemLinearLayout(
-        headerItemMap: MutableMap<Int, LinearLayout>, linearLayoutWebNotifyHeaders: LinearLayout, key: String?, value: String?
+        headerItemMap: MutableMap<Int, LinearLayout>, linearLayoutWebNotifyHeaders: LinearLayout, displayKey: String?, displayValue: String?, realKey: String? = null, realValue: String? = null
     ) {
         val linearLayoutItemAddHeader = View.inflate(requireContext(), R.layout.item_add_header, null) as LinearLayout
         val imageViewRemoveHeader = linearLayoutItemAddHeader.findViewById<ImageView>(R.id.imageViewRemoveHeader)
-        if (key != null && value != null) {
+        if (displayKey != null && displayValue != null) {
             val editTextHeaderKey = linearLayoutItemAddHeader.findViewById<EditText>(R.id.editTextHeaderKey)
             val editTextHeaderValue = linearLayoutItemAddHeader.findViewById<EditText>(R.id.editTextHeaderValue)
-            editTextHeaderKey.setText(key)
-            editTextHeaderValue.setText(value)
+            editTextHeaderKey.setText(displayKey)
+            editTextHeaderValue.setText(displayValue)
+            // 保存真实值在tag用于后续保存
+            if (realKey != null) editTextHeaderKey.setTag(realKey)
+            if (realValue != null) editTextHeaderValue.setTag(realValue)
         }
         imageViewRemoveHeader.tag = headerItemId
         imageViewRemoveHeader.setOnClickListener { view2: View ->
@@ -324,8 +367,16 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
         for (headerItem in headerItemMap.values) {
             val editTextHeaderKey = headerItem.findViewById<EditText>(R.id.editTextHeaderKey)
             val editTextHeaderValue = headerItem.findViewById<EditText>(R.id.editTextHeaderValue)
-            val key = editTextHeaderKey.text.toString().trim()
-            val value = editTextHeaderValue.text.toString().trim()
+            var key = editTextHeaderKey.text.toString().trim()
+            if (key == "******") {
+                val realK = editTextHeaderKey.getTag()
+                if (realK is String) key = realK
+            }
+            var value = editTextHeaderValue.text.toString().trim()
+            if (value == "******") {
+                val real = editTextHeaderValue.getTag()
+                if (real is String) value = real
+            }
             headers[key] = value
         }
         return headers

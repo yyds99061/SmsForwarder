@@ -63,4 +63,8 @@ interface SenderDao {
     @Query("SELECT COUNT(id) FROM Sender WHERE status = 1")
     fun getOnCount(): Flow<Long>
 
+    //查询指定type和name的记录数量
+    @Query("SELECT count(*) FROM Sender WHERE type=:type AND name=:name")
+    fun countByTypeName(type: Int, name: String): Int
+
 }

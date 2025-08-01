@@ -29,17 +29,17 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/sender_name_status"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"/>
 
                 <com.xuexiang.xui.widget.edittext.materialedittext.MaterialEditText
-                    android:id="@+id/et_name"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="5dp"
-                    android:layout_weight="1"
-                    android:singleLine="true"
-                    app:met_clearButton="true"
-                    tools:ignore="SpeakableTextPresentCheck,TouchTargetSizeCheck" />
+                        android:id="@+id/et_name"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="5dp"
+                        android:layout_weight="1"
+                        android:singleLine="true"
+                        app:met_clearButton="true"
+                        tools:ignore="SpeakableTextPresentCheck,TouchTargetSizeCheck"/>
 
                 <com.xuexiang.xui.widget.button.switchbutton.SwitchButton
                     android:id="@+id/sb_enable"
@@ -126,13 +126,13 @@
                 </LinearLayout>
 
                 <com.xuexiang.xui.widget.edittext.materialedittext.MaterialEditText
-                    android:id="@+id/et_webServer"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="textUri"
-                    android:singleLine="true"
-                    app:met_clearButton="true"
-                    tools:ignore="SpeakableTextPresentCheck,TouchTargetSizeCheck" />
+                        android:id="@+id/et_webServer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="textUri"
+                        android:singleLine="true"
+                        app:met_clearButton="true"
+                        tools:ignore="SpeakableTextPresentCheck,TouchTargetSizeCheck"/>
 
             </LinearLayout>
 
@@ -156,16 +156,15 @@
                     tools:ignore="SmallSp" />
 
                 <com.xuexiang.xui.widget.edittext.ClearEditText
-                    android:id="@+id/et_webParams"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:autofillHints=""
-                    android:gravity="left|top"
-                    android:hint="@string/optional"
-                    android:inputType="textMultiLine"
-                    android:minLines="3"
-                    android:text=""
-                    tools:ignore="RtlHardcoded,SpeakableTextPresentCheck" />
+                        android:id="@+id/et_webParams"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:autofillHints=""
+                        android:gravity="left|top"
+                        android:hint="@string/optional"
+                        android:inputType="textMultiLine"
+                        android:minLines="3"
+                        tools:ignore="RtlHardcoded,SpeakableTextPresentCheck"/>
 
             </LinearLayout>
 

