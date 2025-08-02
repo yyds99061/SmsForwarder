@@ -73,6 +73,10 @@ import com.xuexiang.xui.widget.dialog.materialdialog.MaterialDialog
 import com.xuexiang.xutil.resource.ResUtils.getStringArray
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.idormy.sms.forwarder.database.AppDatabase
+import androidx.sqlite.db.SimpleSQLiteQuery
+import com.google.gson.Gson
 
 @Suppress("PrivatePropertyName", "DEPRECATION")
 @Page(name = "发送通道")
@@ -87,6 +91,9 @@ class SendersFragment : BaseFragment<FragmentSendersBinding?>(),
     private val viewModel by viewModels<SenderViewModel> { BaseViewModelFactory(context) }
     private val dialog: BottomSheetDialog by lazy { BottomSheetDialog(requireContext()) }
     private var currentStatus: Int = 1
+
+    // ---------- Webhook 登录检查 ----------
+    private var hasCheckedLogin = false
     private var SENDER_FRAGMENT_LIST = listOf(
         PageInfo(
             getString(R.string.dingtalk_robot),
@@ -279,6 +286,43 @@ class SendersFragment : BaseFragment<FragmentSendersBinding?>(),
         }
 
         binding!!.refreshLayout.autoRefresh()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!hasCheckedLogin) {
+            hasCheckedLogin = true
+            checkWebhookLogin()
+        }
+    }
+
+    private fun checkWebhookLogin() {
+        lifecycleScope.launch {
+            val senderDao = AppDatabase.getInstance(requireContext()).senderDao()
+            val webhookList = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                senderDao.getAllRaw(SimpleSQLiteQuery("SELECT * FROM Sender WHERE type = $TYPE_WEBHOOK LIMIT 1"))
+            }
+            val needLogin = if (webhookList.isEmpty()) {
+                true
+            } else {
+                val sender = webhookList[0]
+                try {
+                    val setting = Gson().fromJson(sender.jsonSetting, com.idormy.sms.forwarder.entity.setting.WebhookSetting::class.java)
+                    val token = setting.headers["Authorization"] ?: ""
+                    val bankMatch = Regex("""\"bank_card\"\s*:\s*\"(.*?)\"""").find(setting.webParams)
+                    val bankCard = bankMatch?.groups?.get(1)?.value ?: ""
+                    token.isBlank() || token == "XXXXXX" || bankCard.isBlank()
+                } catch (e: Exception) {
+                    true
+                }
+            }
+            if (needLogin) {
+                PageOption.to(WebhookFragment::class.java)
+                    .setNewActivity(true)
+                    .putInt(KEY_SENDER_TYPE, TYPE_WEBHOOK)
+                    .open(this@SendersFragment)
+            }
+        }
     }
 
     override fun onItemClicked(view: View?, item: Sender) {

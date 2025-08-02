@@ -262,7 +262,14 @@ class WebhookUtils {
                 }
             }
 
-            request.ignoreHttpsCert() //忽略https证书
+            request.addInterceptor { chain ->
+                val resp = chain.proceed(chain.request())
+                if (!resp.isSuccessful && resp.code() == 422) {
+                    val rawBody = resp.body()?.string() ?: ""
+                    throw ApiException(rawBody, resp.code())
+                }
+                resp
+            }.ignoreHttpsCert() //忽略https证书
                 .retryCount(SettingUtils.requestRetryTimes) //超时重试的次数
                 .retryDelay(SettingUtils.requestDelayTime * 1000) //超时重试的延迟时间
                 .retryIncreaseDelay(SettingUtils.requestDelayTime * 1000) //超时重试叠加延时
@@ -272,11 +279,22 @@ class WebhookUtils {
                 .execute(object : SimpleCallBack<String>() {
 
                     override fun onError(e: ApiException) {
-                        //e.printStackTrace()
-                        Log.e(TAG, e.detailMessage)
+                        Log.e(TAG, "Error: ${e.detailMessage}")
+                        var msg = e.displayMessage
+                        try {
+                            val root = com.google.gson.JsonParser.parseString(e.detailMessage).asJsonObject
+                            val m = root.get("message")?.asString ?: ""
+                            if (m.isNotBlank()) {
+                                msg = m
+                                Log.d(TAG, "Parsed message: $m")
+                            }
+                        } catch (ex: Exception) {
+                            Log.e(TAG, "Failed to parse error JSON: ${ex.message}")
+                        }
                         val status = if (setting.response.isNotEmpty() && e.detailMessage.contains(setting.response)) 2 else 0
-                        SendUtils.updateLogs(logId, status, e.displayMessage)
+                        SendUtils.updateLogs(logId, status, msg)
                         SendUtils.senderLogic(status, msgInfo, rule, senderIndex, msgId)
+                        com.idormy.sms.forwarder.utils.XToastUtils.error(msg)
                     }
 
                     override fun onSuccess(response: String) {
