@@ -242,8 +242,11 @@ class CommonUtils private constructor() {
         fun checkUrl(url: String?, emptyResult: Boolean = false): Boolean {
             if (url.isNullOrEmpty()) return emptyResult
 
-            val regex = Regex("^https?://\\S+\$")
-            return regex.matches(url)
+            // 先把 JSON 转义的 \/ 转换成 /
+            val normalizedUrl = url.replace("\\/", "/")
+
+            val regex = Regex("^https?://\\S+$", RegexOption.IGNORE_CASE)
+            return regex.matches(normalizedUrl)
         }
 
         //是否合法的URL Scheme

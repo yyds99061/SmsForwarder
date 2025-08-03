@@ -131,6 +131,9 @@ class SettingUtils private constructor() {
         //是否调试模式
         var enableDebugMode: Boolean by SharedPreference(SP_DEBUG_MODE, false)
 
+        //Webhook 登录 token
+        var webhookLoginToken: String by SharedPreference("SP_WEBHOOK_LOGIN_TOKEN", "")
+
         //是否启用定位功能
         var enableLocation: Boolean by SharedPreference(SP_LOCATION, false)
 

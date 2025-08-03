@@ -215,7 +215,7 @@
             </LinearLayout>
 
             <LinearLayout
-                android:id="@+id/layout_Headers"
+                android:id="@+id/layout_headers_container"
                 style="@style/BarStyle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -244,6 +244,12 @@
                         tools:ignore="ContentDescription,ImageContrastCheck" />
 
                 </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/layout_headers"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
             </LinearLayout>
 

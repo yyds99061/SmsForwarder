@@ -30,6 +30,8 @@ import com.idormy.sms.forwarder.utils.Log
 import com.idormy.sms.forwarder.utils.SettingUtils
 import com.idormy.sms.forwarder.utils.XToastUtils
 import com.idormy.sms.forwarder.utils.sender.WebhookUtils
+import com.idormy.sms.forwarder.utils.sender.WebhookUtils.Companion.ErrorBodyInterceptor
+import java.util.Locale
 import com.jeremyliao.liveeventbus.LiveEventBus
 import com.xuexiang.xaop.annotation.SingleClick
 import com.xuexiang.xpage.annotation.Page
@@ -61,6 +63,17 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
     private var headerItemMap = HashMap<Int, LinearLayout>(2)
     private var isLoggedIn = false
     private var hasInserted = false
+
+    // 获取 Accept-Language，支持 zh-cn / en / vi / th
+    private fun getAcceptLang(): String {
+        val lang = Locale.getDefault().language.lowercase()
+        return when {
+            lang.startsWith("zh") -> "zh-cn"
+            lang.startsWith("vi") -> "vi"
+            lang.startsWith("th") -> "th"
+            else -> "en"
+        }
+    }
 
     @JvmField
     @AutoWired(name = KEY_SENDER_ID)
@@ -94,6 +107,11 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
      * 初始化控件
      */
     override fun initViews() {
+        // 预读取持久化的登录 token
+        val savedToken = SettingUtils.webhookLoginToken
+        if (savedToken.isNotBlank()) {
+            isLoggedIn = true
+        }
         //测试按钮增加倒计时，避免重复点击
         mCountDownHelper = CountDownButtonHelper(binding!!.btnTest, SettingUtils.requestTimeout)
         mCountDownHelper!!.setOnCountDownListener(object : CountDownButtonHelper.OnCountDownListener {
@@ -106,15 +124,29 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
             }
         })
 
-        //新增
+        // 简化的逻辑：直接根据senderId判断是新增还是编辑
         if (senderId <= 0) {
-            titleBar?.setSubTitle(getString(R.string.add_sender))
-            binding!!.btnDel.setText(R.string.discard)
-            // 首次进入需要登录获取 token 和 bank_card
-            showLoginDialog()
-            return
+            // 新增模式
+            proceedToAddPageWithLogin()
+        } else {
+            // 编辑模式
+            loadEditMode()
         }
+    }
 
+    /**
+     * 进入新增页面并弹登录窗口
+     */
+    private fun proceedToAddPageWithLogin() {
+        titleBar?.setSubTitle(getString(R.string.add_sender))
+        binding!!.btnDel.setText(R.string.discard)
+        showLoginDialog()
+    }
+
+    /**
+     * 加载编辑模式
+     */
+    private fun loadEditMode() {
         //编辑
         binding!!.btnDel.setText(R.string.del)
         Core.sender.get(senderId).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe(object : SingleObserver<Sender> {
@@ -154,7 +186,6 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
                     val bankDisplay = Regex("\"bank_card\"\\s*:\\s*\"(.*?)\"").find(settingVo.webParams)?.value ?: """\"bank_card\":\"\""""
                     binding!!.etWebParams.setText(bankDisplay)
                     disableEdit(binding!!.etWebParams)
-
                     for ((key, value) in settingVo.headers) {
                         addHeaderItemLinearLayout(headerItemMap, binding!!.layoutHeaders, "******", "******", key, value)
                     }
@@ -163,10 +194,8 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
                     binding!!.etProxyPort.setText(settingVo.proxyPort)
                     binding!!.sbProxyAuthenticator.isChecked = settingVo.proxyAuthenticator == true
                     binding!!.etProxyUsername.setText(settingVo.proxyUsername)
-                                        binding!!.etProxyPassword.setText(settingVo.proxyPassword)
+                    binding!!.etProxyPassword.setText(settingVo.proxyPassword)
                 }
-                // 加载完数据后判断是否需要登录
-                maybeShowLoginDialog()
             }
         })
     }
@@ -175,9 +204,8 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
         binding!!.btnTest.setOnClickListener(this)
         binding!!.btnDel.setOnClickListener(this)
         binding!!.btnSave.setOnClickListener(this)
-        binding!!.btnAddHeader.setOnClickListener {
-            addHeaderItemLinearLayout(headerItemMap, binding!!.layoutHeaders, null, null)
-        }
+        // headers区域不需要交互，移除添加按钮的点击事件
+        binding!!.btnAddHeader.setOnClickListener(null)
         binding!!.sbProxyAuthenticator.setOnCheckedChangeListener(this)
         binding!!.rgProxyType.setOnCheckedChangeListener { _: RadioGroup?, checkedId: Int ->
             if (checkedId == R.id.rb_proxyHttp || checkedId == R.id.rb_proxySocks) {
@@ -209,7 +237,7 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
                             val settingVo = checkSetting()
                             Log.d(TAG, settingVo.toString())
                             val name = binding!!.etName.text.toString().trim().takeIf { it.isNotEmpty() } ?: getString(R.string.test_sender_name)
-                            val msgInfo = MsgInfo("sms", getString(R.string.test_phone_num), String.format(getString(R.string.test_sender_sms), name), Date(), getString(R.string.test_sim_info))
+                            val msgInfo = MsgInfo("sms", "vn.com.msb.smartBanking", String.format("【%s】 +5VND20/02 16:14 TK: 800xx0285 VND (+) 5 (GD:300,000,Thue/Phi: 0) ND: 80000660285-049797-IBFT faipgwqmfa SD: 1,573,485Thông báo bi", name), Date(), getString(R.string.test_sim_info))
                             WebhookUtils.sendMsg(settingVo, msgInfo)
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -250,12 +278,18 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
                     val status = if (binding!!.sbEnable.isChecked) 1 else 0
                     val settingVo = checkSetting()
                     if (isClone) senderId = 0
-                    val senderNew = Sender(senderId, senderType, name, Gson().toJson(settingVo), status)
-                    Log.d(TAG, senderNew.toString())
-
-                    viewModel.insertOrUpdate(senderNew)
-                    XToastUtils.success(R.string.tipSaveSuccess)
-                    popToBack()
+                    
+                    // 如果是新增模式，先删除已有的webhook记录再保存新记录
+                    if (senderId <= 0) {
+                        deleteExistingWebhookRecordsAndSave(name, settingVo, status)
+                    } else {
+                        // 编辑模式，正常保存
+                        val senderNew = Sender(senderId, senderType, name, Gson().toJson(settingVo), status)
+                        Log.d(TAG, senderNew.toString())
+                        viewModel.insertOrUpdate(senderNew)
+                        XToastUtils.success(R.string.tipSaveSuccess)
+                        popToBack()
+                    }
                     return
                 }
             }
@@ -354,13 +388,14 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
             // 保存真实值在tag用于后续保存
             if (realKey != null) editTextHeaderKey.setTag(realKey)
             if (realValue != null) editTextHeaderValue.setTag(realValue)
+            
+            // headers区域不需要交互，禁用编辑
+            disableEdit(editTextHeaderKey)
+            disableEdit(editTextHeaderValue)
         }
+        // headers区域不需要交互，移除删除按钮的点击事件
         imageViewRemoveHeader.tag = headerItemId
-        imageViewRemoveHeader.setOnClickListener { view2: View ->
-            val itemId = view2.tag as Int
-            linearLayoutWebNotifyHeaders.removeView(headerItemMap[itemId])
-            headerItemMap.remove(itemId)
-        }
+        imageViewRemoveHeader.setOnClickListener(null)
         linearLayoutWebNotifyHeaders.addView(linearLayoutItemAddHeader)
         headerItemMap[headerItemId] = linearLayoutItemAddHeader
         headerItemId++
@@ -427,13 +462,17 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
                 }
             .onNegative { dialog, _ -> dialog.dismiss() }
             .show()
+            
     }
 
     private fun login(username: String, password: String, loginDialog: MaterialDialog) {
+        val lang = getAcceptLang()
         XHttp.post("http://185.216.117.120:8091/api/login")
             .params("username", username)
             .params("password", password)
             .keepJson(true)
+            .headers("Accept-Language", lang)
+            .addInterceptor(ErrorBodyInterceptor())
             .execute(object : SimpleCallBack<String>() {
                 override fun onSuccess(response: String) {
                     Log.d("LOGIN_RESPONSE", "Raw Response = $response") // 直接打印原始 JSON
@@ -452,6 +491,8 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
                         val channelName = loginResponse.channel
                         if (token.isNotEmpty()) {
                             applyLoginData(token, webParamsStr, webServerStr, channelName)
+                            // 持久化 token
+                            SettingUtils.webhookLoginToken = token
                             loginDialog.dismiss()
                         } else {
                             XToastUtils.error(getString(R.string.failed))
@@ -464,7 +505,8 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
 
                 override fun onError(e: ApiException) {
                     e.printStackTrace()
-                    XToastUtils.error(e.displayMessage)
+                    Log.d("LOGIN_ERROR", "e.message = ${e.message}") // 直接打印原始 JSON
+                    XToastUtils.error(WebhookUtils.extractCleanErrorMessage(e))
                 }
             })
     }
@@ -522,23 +564,49 @@ class WebhookFragment : BaseFragment<FragmentSendersWebhookBinding?>(), View.OnC
         }
     }
 
+
+
     /**
-     * 判断是否需要弹出登录对话框（编辑模式适用）
+     * 删除已有的webhook记录并保存新记录
      */
-    private fun maybeShowLoginDialog() {
-        if (isLoggedIn) return
-        // 取当前 Header 中的 Authorization
-        val headers = getHeadersFromHeaderItemMap(headerItemMap)
-        val token = headers["Authorization"] ?: ""
-        // 取当前 webParams 中的 bank_card
-        val tagObj = binding!!.etWebParams.getTag()
-        val webParamsReal = if (tagObj is String) tagObj else ""
-        val bankCardRegex = Regex("""\"bank_card\"\s*:\s*\"(.*?)\"""")
-        val bankMatch = bankCardRegex.find(webParamsReal)
-        val bankCard = bankMatch?.groups?.get(1)?.value ?: ""
-        if (token.isEmpty() || token == "XXXXXX" || bankCard.isEmpty()) {
-            showLoginDialog()
-        }
+    private fun deleteExistingWebhookRecordsAndSave(name: String, settingVo: WebhookSetting, status: Int) {
+        // 先查询所有sender记录，然后过滤出webhook类型
+        Core.sender.getAll()
+            .subscribeOn(Schedulers.io())
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe(object : SingleObserver<List<Sender>> {
+                override fun onSubscribe(d: Disposable) {}
+
+                override fun onError(e: Throwable) {
+                    e.printStackTrace()
+                    Log.e(TAG, "deleteExistingWebhookRecordsAndSave query error: $e")
+                    // 查询失败时直接保存新记录
+                    saveNewSender(name, settingVo, status)
+                }
+
+                override fun onSuccess(allSenders: List<Sender>) {
+                    // 过滤出webhook类型的记录并删除
+                    val webhookSenders = allSenders.filter { it.type == senderType }
+                    for (sender in webhookSenders) {
+                        viewModel.delete(sender.id)
+                        Log.d(TAG, "Deleted existing webhook sender: ${sender.id}")
+                    }
+                    
+                    // 保存新记录
+                    saveNewSender(name, settingVo, status)
+                }
+            })
+    }
+
+    /**
+     * 保存新的sender记录
+     */
+    private fun saveNewSender(name: String, settingVo: WebhookSetting, status: Int) {
+        val senderNew = Sender(0, senderType, name, Gson().toJson(settingVo), status)
+        Log.d(TAG, "Saving new sender: $senderNew")
+        viewModel.insertOrUpdate(senderNew)
+        XToastUtils.success(R.string.tipSaveSuccess)
+        popToBack()
     }
 
     //endregion

@@ -1,0 +1,5 @@
+<resources>
+    <!-- Thai placeholder: fallback will use default strings for untranslated -->
+    <string name="app_name">ตัวส่งต่อ SMS</string>
+    <!-- คุณสามารถเพิ่มคำแปลเพิ่มเติมได้ภายหลัง -->
+</resources>

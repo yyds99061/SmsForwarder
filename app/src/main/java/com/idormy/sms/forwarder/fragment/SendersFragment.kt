@@ -58,7 +58,11 @@ import com.idormy.sms.forwarder.utils.TYPE_WEWORK_ROBOT
 import com.idormy.sms.forwarder.utils.XToastUtils
 import com.scwang.smartrefresh.layout.api.RefreshLayout
 import com.xuexiang.xaop.annotation.SingleClick
+import com.xuexiang.xhttp2.XHttp
+import com.xuexiang.xhttp2.callback.SimpleCallBack
+import com.xuexiang.xhttp2.exception.ApiException
 import com.xuexiang.xpage.annotation.Page
+import java.util.Locale
 import com.xuexiang.xpage.base.XPageFragment
 import com.xuexiang.xpage.core.PageOption
 import com.xuexiang.xpage.enums.CoreAnim
@@ -302,26 +306,103 @@ class SendersFragment : BaseFragment<FragmentSendersBinding?>(),
             val webhookList = withContext(kotlinx.coroutines.Dispatchers.IO) {
                 senderDao.getAllRaw(SimpleSQLiteQuery("SELECT * FROM Sender WHERE type = $TYPE_WEBHOOK LIMIT 1"))
             }
-            val needLogin = if (webhookList.isEmpty()) {
-                true
-            } else {
-                val sender = webhookList[0]
-                try {
-                    val setting = Gson().fromJson(sender.jsonSetting, com.idormy.sms.forwarder.entity.setting.WebhookSetting::class.java)
-                    val token = setting.headers["Authorization"] ?: ""
-                    val bankMatch = Regex("""\"bank_card\"\s*:\s*\"(.*?)\"""").find(setting.webParams)
-                    val bankCard = bankMatch?.groups?.get(1)?.value ?: ""
-                    token.isBlank() || token == "XXXXXX" || bankCard.isBlank()
-                } catch (e: Exception) {
-                    true
-                }
-            }
-            if (needLogin) {
+            
+            if (webhookList.isEmpty()) {
+                // 没有数据，自动进入新增页面弹登录窗口
                 PageOption.to(WebhookFragment::class.java)
                     .setNewActivity(true)
                     .putInt(KEY_SENDER_TYPE, TYPE_WEBHOOK)
                     .open(this@SendersFragment)
+            } else {
+                // 有数据，检查登录状态和用户info接口，然后停留在列表页
+                checkWebhookUserStatus()
             }
+        }
+    }
+
+    private fun checkWebhookUserStatus() {
+        val savedToken = com.idormy.sms.forwarder.utils.SettingUtils.webhookLoginToken
+        
+        if (savedToken.isNotBlank()) {
+            // 已有token，调用users/info接口检查用户状态
+            val lang = getAcceptLang()
+            XHttp.get("http://185.216.117.120:8091/api/users/info")
+                .headers("Authorization", savedToken)
+                .headers("Accept-Language", lang)
+                .keepJson(true)
+                .addInterceptor(com.idormy.sms.forwarder.utils.sender.WebhookUtils.Companion.ErrorBodyInterceptor())
+                .execute(object : SimpleCallBack<String>() {
+                    override fun onSuccess(response: String) {
+                        try {
+                            val root = com.google.gson.JsonParser.parseString(response).asJsonObject
+                            val dataObj = if (root.has("data")) root.getAsJsonObject("data") else root
+                            val userObj = dataObj.getAsJsonObject("user")
+                            val status = userObj.get("status").asString
+                            
+                            if (status != "active") {
+                                // 用户被禁用，清除token，进入新增页面
+                                val msg = if (Locale.getDefault().language.startsWith("zh")) "用户已被禁用，请重新登录" else "User is disabled, please login again"
+                                XToastUtils.error(msg)
+                                com.idormy.sms.forwarder.utils.SettingUtils.webhookLoginToken = ""
+                                PageOption.to(WebhookFragment::class.java)
+                                    .setNewActivity(true)
+                                    .putInt(KEY_SENDER_TYPE, TYPE_WEBHOOK)
+                                    .open(this@SendersFragment)
+                            } else {
+                                // 用户状态正常，停留在列表页，不进行其他操作
+                                Log.d(TAG, "Webhook user status is active, staying on list page")
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            // info接口解析失败，进入新增页面
+                            PageOption.to(WebhookFragment::class.java)
+                                .setNewActivity(true)
+                                .putInt(KEY_SENDER_TYPE, TYPE_WEBHOOK)
+                                .open(this@SendersFragment)
+                        }
+                    }
+
+                    override fun onError(e: ApiException) {
+                        // 检查HTTP状态码
+                        when (e.code) {
+                            401 -> {
+                                // token失效，清除token，进入新增页面
+                                val msg = if (Locale.getDefault().language.startsWith("zh")) "登录已过期，请重新登录" else "Login expired, please login again"
+                                XToastUtils.error(msg)
+                                com.idormy.sms.forwarder.utils.SettingUtils.webhookLoginToken = ""
+                                PageOption.to(WebhookFragment::class.java)
+                                    .setNewActivity(true)
+                                    .putInt(KEY_SENDER_TYPE, TYPE_WEBHOOK)
+                                    .open(this@SendersFragment)
+                            }
+                            else -> {
+                                // 其他错误，进入新增页面
+                                XToastUtils.error(com.idormy.sms.forwarder.utils.sender.WebhookUtils.extractCleanErrorMessage(e))
+                                PageOption.to(WebhookFragment::class.java)
+                                    .setNewActivity(true)
+                                    .putInt(KEY_SENDER_TYPE, TYPE_WEBHOOK)
+                                    .open(this@SendersFragment)
+                            }
+                        }
+                    }
+                })
+        } else {
+            // 未登录，进入新增页面
+            PageOption.to(WebhookFragment::class.java)
+                .setNewActivity(true)
+                .putInt(KEY_SENDER_TYPE, TYPE_WEBHOOK)
+                .open(this@SendersFragment)
+        }
+    }
+
+    // 获取 Accept-Language，支持 zh-cn / en / vi / th
+    private fun getAcceptLang(): String {
+        val lang = Locale.getDefault().language.lowercase()
+        return when {
+            lang.startsWith("zh") -> "zh-cn"
+            lang.startsWith("vi") -> "vi"
+            lang.startsWith("th") -> "th"
+            else -> "en"
         }
     }
 

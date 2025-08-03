@@ -34,11 +34,29 @@ import java.util.Date
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
-
 class WebhookUtils {
     companion object {
 
         private val TAG: String = WebhookUtils::class.java.simpleName
+
+        // 新增：拦截 HTTP 错误响应并保留 body
+
+        class ErrorBodyInterceptor : okhttp3.Interceptor {
+            override fun intercept(chain: okhttp3.Interceptor.Chain): Response {
+                val response = chain.proceed(chain.request())
+                if (!response.isSuccessful) {
+                    val rawBody = response.body()?.string() ?: ""
+                    Log.d(TAG, "ErrorBodyInterceptor: error body = $rawBody")
+                    // 重新构造 Response 以便后续还能读取
+                    val newResponse = response.newBuilder()
+                        .body(okhttp3.ResponseBody.create(response.body()?.contentType(), rawBody))
+                        .build()
+                    // 返回错误响应，让框架正常处理
+                    throw ApiException(rawBody, response.code())
+                }
+                return response
+            }
+        }
 
         fun sendMsg(
             setting: WebhookSetting,
@@ -81,7 +99,6 @@ class WebhookUtils {
 
             var webParams = setting.webParams.trim()
 
-            //支持HTTP基本认证(Basic Authentication)
             val regex = "^(https?://)([^:]+):([^@]+)@(.+)"
             val matches = Regex(regex, RegexOption.IGNORE_CASE).findAll(requestUrl).toList()
                 .flatMap(MatchResult::groupValues)
@@ -91,9 +108,7 @@ class WebhookUtils {
                 Log.i(TAG, "requestUrl:$requestUrl")
             }
 
-            //通过`Content-Type=applicaton/json`指定请求体为`json`格式
             var isJson = false
-            //通过`Content-Type=text/plain、text/html、text/css、text/javascript、text/xml`指定请求体为`文本`格式
             var isText = false
             var mediaType = "text/plain"
             for ((key, value) in setting.headers.entries) {
@@ -110,10 +125,7 @@ class WebhookUtils {
             }
 
             val request = if (setting.method == "GET" && TextUtils.isEmpty(webParams)) {
-                setting.webServer += (if (setting.webServer.contains("?")) "&" else "?") + "from=" + URLEncoder.encode(
-                    from,
-                    "UTF-8"
-                )
+                setting.webServer += (if (setting.webServer.contains("?")) "&" else "?") + "from=" + URLEncoder.encode(from, "UTF-8")
                 requestUrl += "&content=" + URLEncoder.encode(content, "UTF-8")
                 if (!TextUtils.isEmpty(sign)) {
                     requestUrl += "&timestamp=$timestamp"
@@ -214,17 +226,19 @@ class WebhookUtils {
                 postRequest
             }
 
-            //添加headers
+            // 添加 headers
             for ((key, value) in setting.headers.entries) {
                 request.headers(key, value)
             }
 
-            //支持HTTP基本认证(Basic Authentication)
+            // 统一加入语言头
+            request.headers("Accept-Language", com.idormy.sms.forwarder.utils.LangUtils.getAcceptLang())
+            // 支持 HTTP 基本认证
             if (matches.isNotEmpty()) {
                 request.addInterceptor(BasicAuthInterceptor(matches[2], matches[3]))
             }
 
-            //设置代理
+            // 设置代理
             if ((setting.proxyType == Proxy.Type.HTTP || setting.proxyType == Proxy.Type.SOCKS)
                 && !TextUtils.isEmpty(setting.proxyHost) && !TextUtils.isEmpty(setting.proxyPort)
             ) {
@@ -239,14 +253,9 @@ class WebhookUtils {
                 Log.d(TAG, "proxyHost = $proxyHost, proxyPort = $proxyPort")
                 request.okproxy(Proxy(setting.proxyType, InetSocketAddress(proxyHost, proxyPort)))
 
-                //代理的鉴权账号密码
-                if (setting.proxyAuthenticator && (!TextUtils.isEmpty(setting.proxyUsername) || !TextUtils.isEmpty(setting.proxyPassword))
-                ) {
-                    Log.i(TAG, "proxyUsername = ${setting.proxyUsername}, proxyPassword = ${setting.proxyPassword}")
-
+                if (setting.proxyAuthenticator && (!TextUtils.isEmpty(setting.proxyUsername) || !TextUtils.isEmpty(setting.proxyPassword))) {
                     if (setting.proxyType == Proxy.Type.HTTP) {
-                        request.okproxyAuthenticator { _: Route?, response: Response ->
-                            //设置代理服务器账号密码
+                        request.okproxyAuthenticator { _: Route?, response: okhttp3.Response ->
                             val credential = Credentials.basic(setting.proxyUsername, setting.proxyPassword)
                             response.request().newBuilder()
                                 .header("Proxy-Authorization", credential)
@@ -262,39 +271,22 @@ class WebhookUtils {
                 }
             }
 
-            request.addInterceptor { chain ->
-                val resp = chain.proceed(chain.request())
-                if (!resp.isSuccessful && resp.code() == 422) {
-                    val rawBody = resp.body()?.string() ?: ""
-                    throw ApiException(rawBody, resp.code())
-                }
-                resp
-            }.ignoreHttpsCert() //忽略https证书
-                .retryCount(SettingUtils.requestRetryTimes) //超时重试的次数
-                .retryDelay(SettingUtils.requestDelayTime * 1000) //超时重试的延迟时间
-                .retryIncreaseDelay(SettingUtils.requestDelayTime * 1000) //超时重试叠加延时
-                .timeStamp(true) //url自动追加时间戳，避免缓存
-                .addInterceptor(LoggingInterceptor(logId)) //增加一个log拦截器, 记录请求日志
-                .addInterceptor(NoContentInterceptor(logId)) //拦截 HTTP 204 响应
+            request.ignoreHttpsCert()
+                .retryCount(SettingUtils.requestRetryTimes)
+                .retryDelay(SettingUtils.requestDelayTime * 1000)
+                .retryIncreaseDelay(SettingUtils.requestDelayTime * 1000)
+                .timeStamp(true)
+                .addInterceptor(LoggingInterceptor(logId))
+                .addInterceptor(NoContentInterceptor(logId))
+                .addInterceptor(ErrorBodyInterceptor()) // 新增：捕获 HTTP 错误 body
                 .execute(object : SimpleCallBack<String>() {
 
                     override fun onError(e: ApiException) {
-                        Log.e(TAG, "Error: ${e.detailMessage}")
-                        var msg = e.displayMessage
-                        try {
-                            val root = com.google.gson.JsonParser.parseString(e.detailMessage).asJsonObject
-                            val m = root.get("message")?.asString ?: ""
-                            if (m.isNotBlank()) {
-                                msg = m
-                                Log.d(TAG, "Parsed message: $m")
-                            }
-                        } catch (ex: Exception) {
-                            Log.e(TAG, "Failed to parse error JSON: ${ex.message}")
-                        }
-                        val status = if (setting.response.isNotEmpty() && e.detailMessage.contains(setting.response)) 2 else 0
-                        SendUtils.updateLogs(logId, status, msg)
+                        var errorMsg = extractCleanErrorMessage(e)
+                        Log.d(TAG, "errorMsg = $errorMsg")
+                        val status = if (setting.response.isNotEmpty() && errorMsg.contains(setting.response)) 2 else 0
+                        SendUtils.updateLogs(logId, status, errorMsg)
                         SendUtils.senderLogic(status, msgInfo, rule, senderIndex, msgId)
-                        com.idormy.sms.forwarder.utils.XToastUtils.error(msg)
                     }
 
                     override fun onSuccess(response: String) {
@@ -303,12 +295,9 @@ class WebhookUtils {
                         SendUtils.updateLogs(logId, status, response)
                         SendUtils.senderLogic(status, msgInfo, rule, senderIndex, msgId)
                     }
-
                 })
-
         }
 
-        //JSON需要转义的字符
         private fun escapeJson(str: String?): String {
             if (str == null) return "null"
             val jsonStr: String = Gson().toJson(str)
@@ -322,5 +311,37 @@ class WebhookUtils {
             return dateFormat.format(currentTime)
         }
 
+
+        fun extractCleanErrorMessage(e: Throwable): String {
+            var rawMsg = when (e) {
+                is ApiException -> {
+                    e.displayMessage ?: e.detailMessage ?: e.message ?: "未知错误"
+                }
+                else -> e.message ?: "未知错误"
+            }
+
+            // 去除类似 "com.xuexiang.xhttp2.exception.ApiException: " 这类前缀
+            val colonIndex = rawMsg.indexOf(":")
+            if (colonIndex != -1 && colonIndex < rawMsg.length - 1) {
+                rawMsg = rawMsg.substring(colonIndex + 1).trim()
+            }
+
+            // 尝试把消息当作 JSON 解析，取 message 或 errors.from[0]
+            try {
+                val json = Gson().fromJson(rawMsg, Map::class.java)
+                if (json["message"] is String) {
+                    rawMsg = json["message"].toString()
+                }
+                val errors = json["errors"] as? Map<*, *>
+                val fromErrors = errors?.get("from") as? List<*>
+                if (!fromErrors.isNullOrEmpty()) {
+                    rawMsg = fromErrors[0].toString()
+                }
+            } catch (_: Exception) {
+                // 不是 JSON，忽略异常，直接返回文本
+            }
+
+            return rawMsg
+        }
     }
 }
